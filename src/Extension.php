@@ -294,6 +294,28 @@ class Extension extends ServiceProvider
             }
         }
 
+        // Thread tracker — topics this character has appeared in, most recent first.
+        $threads = DB::table('rp_post_character as rpc')
+            ->join('posts as p', 'p.id', '=', 'rpc.post_id')
+            ->join('topics as t', 't.id', '=', 'p.topic_id')
+            ->where('rpc.character_id', $c->id)
+            ->where('t.hidden', false)
+            ->groupBy('t.id', 't.title', 't.slug')
+            ->orderByRaw('MAX(p.created_at) DESC')
+            ->limit(20)
+            ->get(['t.id', 't.title', 't.slug', DB::raw('COUNT(*) as posts')]);
+
+        $tracker = '';
+        if ($threads->isNotEmpty()) {
+            $items = '';
+            foreach ($threads as $t) {
+                $items .= '<a class="rp-thread" href="/t/'.$e($t->slug).'">'
+                    .'<span class="rp-thread-title">'.$e($t->title).'</span>'
+                    .'<span class="rp-thread-count">'.(int) $t->posts.'</span></a>';
+            }
+            $tracker = '<section class="rp-tracker"><h2 class="rp-tr-h">Threads</h2>'.$items.'</section>';
+        }
+
         $body = <<<HTML
         <div class="rp-profile">
           <div class="rp-head">
@@ -306,6 +328,7 @@ class Extension extends ServiceProvider
             </div>
           </div>
           {$bio}
+          {$tracker}
         </div>
         HTML;
 
@@ -320,6 +343,15 @@ class Extension extends ServiceProvider
         .rp-played{margin-top:3px}
         .rp-played a{color:rgb(var(--c-primary));text-decoration:none}
         .rp-played a:hover{text-decoration:underline}
+        .rp-tracker{margin-top:26px}
+        .rp-tr-h{font-size:15px;font-weight:700;margin:0 0 10px;color:rgb(var(--c-text))}
+        .rp-thread{display:flex;align-items:center;justify-content:space-between;gap:12px;padding:10px 12px;
+          border:1px solid rgb(var(--c-border));border-radius:var(--c-radius,8px);background:rgb(var(--c-surface));
+          text-decoration:none;margin-bottom:6px}
+        .rp-thread:hover{border-color:rgb(var(--c-primary))}
+        .rp-thread-title{color:rgb(var(--c-text));font-weight:500;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+        .rp-thread-count{flex-shrink:0;font-size:12px;color:rgb(var(--c-muted));background:rgb(var(--c-surface-2));
+          padding:2px 8px;border-radius:999px}
         .rp-mono{color:#fff}
         CSS;
 
@@ -364,44 +396,109 @@ class Extension extends ServiceProvider
                 $by = '<div class="rp-d-by">'.$e(\App\Support\Username::display($o->name, $o->id)).'</div>';
             }
 
-            $cards .= '<a class="rp-card" href="/characters/'.$e($c->slug).'">'
+            $active = $c->last_active_at ? $c->last_active_at->getTimestamp() : 0;
+            $activeLabel = $c->last_active_at ? 'active '.$c->last_active_at->diffForHumans() : 'no posts yet';
+            $cards .= '<a class="rp-card" href="/characters/'.$e($c->slug).'"'
+                .' data-name="'.$e(Str::lower($c->name)).'"'
+                .' data-claim="'.$e(Str::lower((string) $c->claim)).'"'
+                .' data-posts="'.(int) $c->post_count.'" data-active="'.$active.'">'
                 .'<div class="rp-d-av">'.$av.'</div>'
-                .'<div class="rp-d-meta"><div class="rp-d-name">'.$e($c->name).'</div>'.$claim.$by.'</div>'
-                .'</a>';
+                .'<div class="rp-d-meta"><div class="rp-d-name">'.$e($c->name).'</div>'.$claim.$by
+                .'<div class="rp-d-stat">'.(int) $c->post_count.' posts · '.$e($activeLabel).'</div>'
+                .'</div></a>';
         }
 
         if ($cards === '') {
             $cards = '<p class="rp-muted">No characters yet.</p>';
         }
 
+        $manage = self::canModerate()
+            ? '<a class="rp-btn rp-ok rp-manage" href="/rp/staff">Manage role-play</a>'
+            : '';
+
         $count = $chars->count();
         $body = <<<HTML
         <div class="rp-dir">
-          <h1 class="rp-d-title">Characters</h1>
-          <div class="rp-muted rp-d-sub">{$count} character(s)</div>
-          <div class="rp-grid">{$cards}</div>
+          <div class="rp-d-bar">
+            <div>
+              <h1 class="rp-d-title">Characters</h1>
+              <div class="rp-muted rp-d-sub">{$count} character(s)</div>
+            </div>
+            {$manage}
+          </div>
+          <div class="rp-d-tools">
+            <input id="rp-search" class="rp-d-search" type="search" placeholder="Search name or claim…" autocomplete="off">
+            <select id="rp-sort" class="rp-d-sort">
+              <option value="name">Name (A–Z)</option>
+              <option value="active">Recently active</option>
+              <option value="posts">Most posts</option>
+            </select>
+          </div>
+          <div class="rp-grid" id="rp-grid">{$cards}</div>
+          <p class="rp-muted rp-empty" id="rp-empty" style="display:none">No characters match your search.</p>
         </div>
         HTML;
 
         $css = <<<CSS
         .rp-dir{max-width:900px;margin:0 auto;padding:24px 16px}
+        .rp-d-bar{display:flex;align-items:flex-start;justify-content:space-between;gap:12px}
         .rp-d-title{font-size:26px;font-weight:700;margin:0;color:rgb(var(--c-text))}
-        .rp-d-sub{margin:2px 0 18px}
+        .rp-d-sub{margin:2px 0 0}
         .rp-muted{color:rgb(var(--c-muted));font-size:14px}
+        .rp-btn{font:inherit;font-size:13px;font-weight:600;padding:7px 13px;border-radius:var(--c-radius,8px);
+          border:1px solid rgb(var(--c-border));background:rgb(var(--c-surface));color:rgb(var(--c-text));cursor:pointer;text-decoration:none;white-space:nowrap}
+        .rp-ok{background:rgb(var(--c-primary));border-color:rgb(var(--c-primary));color:#fff}
+        .rp-d-tools{display:flex;gap:8px;margin:16px 0}
+        .rp-d-search{flex:1;font:inherit;font-size:14px;padding:8px 11px;border-radius:var(--c-radius,8px);
+          border:1px solid rgb(var(--c-border));background:rgb(var(--c-surface));color:rgb(var(--c-text))}
+        .rp-d-sort{font:inherit;font-size:13px;padding:8px 10px;border-radius:var(--c-radius,8px);
+          border:1px solid rgb(var(--c-border));background:rgb(var(--c-surface));color:rgb(var(--c-text));cursor:pointer}
         .rp-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(240px,1fr));gap:12px}
         .rp-card{display:flex;gap:12px;align-items:center;padding:12px;border:1px solid rgb(var(--c-border));
           border-radius:var(--c-radius,10px);background:rgb(var(--c-surface));text-decoration:none}
         .rp-card:hover{border-color:rgb(var(--c-primary))}
         .rp-d-av img,.rp-d-av .rp-mono{width:48px;height:48px;border-radius:var(--c-avatar-radius);object-fit:cover;
           display:flex;align-items:center;justify-content:center;font-weight:600;color:#fff}
+        .rp-d-meta{min-width:0}
         .rp-d-name{font-weight:600;color:rgb(var(--c-text))}
         .rp-d-claim{font-size:12px;color:rgb(var(--c-text-2));margin-top:2px}
         .rp-d-claim.rp-dup{color:#d97706}
         .rp-d-by{font-size:12px;color:rgb(var(--c-muted));margin-top:2px}
+        .rp-d-stat{font-size:11px;color:rgb(var(--c-muted));margin-top:3px}
         .rp-mono{color:#fff}
         CSS;
 
-        return ExtPage::render('Characters', $body, $css);
+        $js = <<<'JS'
+        var grid = document.getElementById('rp-grid');
+        var search = document.getElementById('rp-search');
+        var sort = document.getElementById('rp-sort');
+        var empty = document.getElementById('rp-empty');
+        if (grid && search && sort) {
+          var cards = Array.prototype.slice.call(grid.querySelectorAll('.rp-card'));
+          function apply() {
+            var q = search.value.trim().toLowerCase();
+            var shown = 0;
+            cards.forEach(function (c) {
+              var hit = !q || (c.getAttribute('data-name') || '').indexOf(q) >= 0 || (c.getAttribute('data-claim') || '').indexOf(q) >= 0;
+              c.style.display = hit ? '' : 'none';
+              if (hit) shown++;
+            });
+            if (empty) empty.style.display = shown ? 'none' : '';
+          }
+          function resort() {
+            var by = sort.value;
+            var arr = cards.slice().sort(function (a, b) {
+              if (by === 'name') return (a.getAttribute('data-name') || '').localeCompare(b.getAttribute('data-name') || '');
+              return (parseInt(b.getAttribute('data-' + by), 10) || 0) - (parseInt(a.getAttribute('data-' + by), 10) || 0);
+            });
+            arr.forEach(function (c) { grid.appendChild(c); });
+          }
+          search.addEventListener('input', apply);
+          sort.addEventListener('change', resort);
+        }
+        JS;
+
+        return ExtPage::render('Characters', $body, $css, $js);
     }
 
     /** Staff tool: approve/reject pending characters + pick in-character boards. */

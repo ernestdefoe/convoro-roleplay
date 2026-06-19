@@ -41,6 +41,7 @@
       "baseline": false
     }
   ],
+  "nav": { "label": "Characters", "href": "/characters", "auth": false },
   "icon": "icon.svg",
   "premium": false,
   "price": 0
