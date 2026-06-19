@@ -18,6 +18,24 @@
   function setActive(v) {
     document.cookie = COOKIE + '=' + encodeURIComponent(v) + '; path=/; max-age=' + YEAR + '; samesite=lax';
   }
+  function csrf() {
+    var m = document.querySelector('meta[name=csrf-token]');
+    return m ? m.getAttribute('content') : '';
+  }
+
+  // Role-play context for a topic/category, cached so the picker, dice button and
+  // topic badge share one request. Returns {rp, canToggle, topicId, characters}.
+  var ctxCache = {};
+  function getRpContext(topicId, categoryId, slug) {
+    var key = topicId ? 't' + topicId : (slug ? 's' + slug : (categoryId ? 'c' + categoryId : ''));
+    if (!key) return Promise.resolve(null);
+    if (ctxCache[key]) return ctxCache[key];
+    var q = topicId ? 'topic=' + topicId : (slug ? 'slug=' + encodeURIComponent(slug) : 'category=' + categoryId);
+    ctxCache[key] = fetch('/api/ext/rp/context?' + q, { headers: { Accept: 'application/json' }, credentials: 'same-origin' })
+      .then(function (r) { return r.ok ? r.json() : null; })
+      .catch(function () { return null; });
+    return ctxCache[key];
+  }
 
   // Global role-play styling: dice badges, character avatar palette, and the
   // in-character post treatment. Injected once, applies on every forum page.
@@ -61,7 +79,15 @@
       '.rp-dice-foot{display:flex;align-items:center;justify-content:space-between;margin-top:11px}' +
       '.rp-dice-prev{font-size:14px;font-weight:800;color:rgb(var(--c-primary))}' +
       '.rp-dice-go{font:inherit;font-size:13px;font-weight:600;padding:7px 13px;border-radius:8px;' +
-      'border:none;background:rgb(var(--c-primary));color:#fff;cursor:pointer}';
+      'border:none;background:rgb(var(--c-primary));color:#fff;cursor:pointer}' +
+      // topic-page role-play badge + author/staff toggle
+      '.rp-topic-bar{display:flex;align-items:center;gap:10px;margin:0 0 4px}' +
+      '.rp-topic-tag{display:inline-flex;align-items:center;gap:5px;font-size:12px;font-weight:700;' +
+      'letter-spacing:.02em;color:rgb(var(--c-primary));background:rgba(91,91,214,.12);' +
+      'border:1px solid rgba(91,91,214,.28);padding:3px 10px;border-radius:999px}' +
+      '.rp-topic-toggle{font:inherit;font-size:12px;font-weight:600;color:rgb(var(--c-muted));' +
+      'background:none;border:none;cursor:pointer;text-decoration:underline;padding:0}' +
+      '.rp-topic-toggle:hover{color:rgb(var(--c-primary))}';
     document.head.appendChild(gStyle);
   }
 
@@ -86,8 +112,47 @@
       }
     });
   }
+  // Topic-page role-play marker: an "In character" badge on role-play threads,
+  // plus a toggle for the author/staff to flip the topic between RP and regular.
+  function setupTopicRp() {
+    if (!/^\/t\//.test(location.pathname)) return;
+    var h1 = document.querySelector('article.q-post h1');
+    if (!h1 || h1.getAttribute('data-rp-done')) return;
+    var slug = decodeURIComponent(location.pathname.split('/')[2] || '');
+    if (!slug) return;
+    h1.setAttribute('data-rp-done', '1');
+    getRpContext(null, null, slug).then(function (d) {
+      if (!d || (!d.rp && !d.canToggle)) return;
+      var bar = document.createElement('div');
+      bar.className = 'rp-topic-bar';
+      if (d.rp) {
+        var tag = document.createElement('span');
+        tag.className = 'rp-topic-tag';
+        tag.textContent = '🎭 Role-play thread';
+        bar.appendChild(tag);
+      }
+      if (d.canToggle && d.topicId) {
+        var btn = document.createElement('button');
+        btn.type = 'button';
+        btn.className = 'rp-topic-toggle';
+        btn.textContent = d.rp ? 'Make regular' : 'Make role-play';
+        btn.addEventListener('click', function () {
+          btn.disabled = true;
+          fetch('/api/ext/rp/topic/' + d.topicId + '/rp', {
+            method: 'POST', credentials: 'same-origin',
+            headers: { 'X-CSRF-TOKEN': csrf(), 'Content-Type': 'application/json', Accept: 'application/json' },
+            body: JSON.stringify({ rp: !d.rp }),
+          }).then(function (r) { if (!r.ok) throw 0; location.reload(); })
+            .catch(function () { btn.disabled = false; });
+        });
+        bar.appendChild(btn);
+      }
+      h1.parentNode.insertBefore(bar, h1);
+    });
+  }
+
   var rpScan;
-  function scheduleScan() { cancelAnimationFrame(rpScan); rpScan = requestAnimationFrame(markRpPosts); }
+  function scheduleScan() { cancelAnimationFrame(rpScan); rpScan = requestAnimationFrame(function () { markRpPosts(); setupTopicRp(); }); }
   scheduleScan();
   // Re-scan on SPA navigation + when live replies are appended.
   new MutationObserver(scheduleScan).observe(document.body, { childList: true, subtree: true });
@@ -117,12 +182,15 @@
   c.registerSlot('composer:toolbar', {
     ext: 'convoro-roleplay',
     order: 40,
-    mount: function (el) {
+    mount: function (el, ctx) {
+      var props = (ctx && ctx.props) || {};
+      // Only inside a topic/category composer — never DMs, profile or edit.
+      if (!props.topicId && !props.categoryId) return;
+
       var wrap = document.createElement('div');
       wrap.className = 'rp-as';
-      wrap.style.display = 'none'; // hidden until we know the user has characters
+      wrap.style.display = 'none'; // hidden until we confirm a role-play context
       wrap.innerHTML = MASK_SVG;
-
       var sel = document.createElement('select');
       sel.className = 'rp-as-select';
       sel.title = 'Choose which character to post as';
@@ -133,37 +201,29 @@
       wrap.appendChild(sel);
       el.appendChild(wrap);
 
-      function reflect() {
-        sel.classList.toggle('rp-as-on', !!sel.value);
-      }
+      function reflect() { sel.classList.toggle('rp-as-on', !!sel.value); }
 
-      fetch('/api/ext/rp/me', { headers: { Accept: 'application/json' }, credentials: 'same-origin' })
-        .then(function (r) { return r.ok ? r.json() : { characters: [] }; })
+      getRpContext(props.topicId, props.categoryId)
         .then(function (d) {
-          var chars = (d && d.characters) || [];
-          if (!chars.length) return; // no characters → stay hidden, no clutter
+          var chars = (d && d.rp && d.characters) || [];
+          if (!chars.length) return; // regular topic or no characters → stay hidden
           chars.forEach(function (ch) {
             var o = document.createElement('option');
             o.value = String(ch.id);
             o.textContent = ch.name;
             sel.appendChild(o);
           });
-          // Restore the active character if it still belongs to the user.
           var active = getActive();
           if (active && sel.querySelector('option[value="' + active + '"]')) {
             sel.value = active;
           } else if (active) {
-            setActive(''); // stale (character gone) — clear
+            setActive('');
           }
           reflect();
           wrap.style.display = '';
-        })
-        .catch(function () {});
+        });
 
-      sel.addEventListener('change', function () {
-        setActive(sel.value);
-        reflect();
-      });
+      sel.addEventListener('change', function () { setActive(sel.value); reflect(); });
 
       return function () { if (el.contains(wrap)) el.removeChild(wrap); };
     },
@@ -184,11 +244,17 @@
     ext: 'convoro-roleplay',
     order: 45,
     mount: function (el, ctx) {
-      var insert = ctx && ctx.props && ctx.props.insertText;
+      var props = (ctx && ctx.props) || {};
+      var insert = props.insertText;
       if (typeof insert !== 'function') return;
+      if (!props.topicId && !props.categoryId) return; // topic composers only
 
       var box = document.createElement('div');
       box.className = 'rp-dice';
+      box.style.display = 'none'; // shown only in a role-play context
+      getRpContext(props.topicId, props.categoryId).then(function (d) {
+        if (d && d.rp) box.style.display = '';
+      });
       var btn = document.createElement('button');
       btn.type = 'button';
       btn.className = 'rp-dice-btn';

@@ -109,8 +109,8 @@ class Extension extends ServiceProvider
             if (! $raw) {
                 return;
             }
-            if (! self::postAsAllowed($post)) {
-                return; // out-of-character board — keep the real account
+            if (! self::isRpTopic((int) $post->topic_id)) {
+                return; // regular topic — keep the real account
             }
             $c = RpCharacter::where('id', (int) $raw)
                 ->where('user_id', $post->user_id)
@@ -128,22 +128,37 @@ class Extension extends ServiceProvider
         });
     }
 
-    /** Category ids where posting as a character is turned OFF (out-of-character boards). */
-    private static function oocCategoryIds(): array
+    /** Category ids designated as role-play boards (topics there are role-play). */
+    private static function rpCategoryIds(): array
     {
         return DB::table('rp_ic_categories')->pluck('category_id')->map(fn ($v) => (int) $v)->all();
     }
 
-    /** May a post be authored as a character? Yes everywhere except OOC boards. */
-    private static function postAsAllowed(Post $post): bool
+    /** Is a category a role-play category? */
+    private static function categoryIsRp(?int $catId): bool
     {
-        $ooc = self::oocCategoryIds();
-        if ($ooc === []) {
-            return true; // no OOC boards configured — posting as a character works everywhere
-        }
-        $catId = DB::table('topics')->where('id', $post->topic_id)->value('category_id');
+        return $catId !== null && in_array($catId, self::rpCategoryIds(), true);
+    }
 
-        return $catId === null || ! in_array((int) $catId, $ooc, true);
+    /** Request-cached per-topic role-play status. */
+    private static array $rpTopicCache = [];
+
+    /**
+     * Is this a role-play topic? An explicit rp_topics row wins; otherwise the
+     * topic follows its category (role-play categories make their topics RP).
+     */
+    private static function isRpTopic(int $topicId): bool
+    {
+        if (isset(self::$rpTopicCache[$topicId])) {
+            return self::$rpTopicCache[$topicId];
+        }
+        $override = DB::table('rp_topics')->where('topic_id', $topicId)->value('is_rp');
+        if ($override !== null) {
+            return self::$rpTopicCache[$topicId] = (bool) $override;
+        }
+        $catId = DB::table('topics')->where('id', $topicId)->value('category_id');
+
+        return self::$rpTopicCache[$topicId] = self::categoryIsRp($catId !== null ? (int) $catId : null);
     }
 
     /** Does the current user hold the role-play moderation permission? */
@@ -227,10 +242,13 @@ class Extension extends ServiceProvider
                 return self::$identityCache[$post->id];
             }
 
-            $charId = DB::table('rp_post_character')->where('post_id', $post->id)->value('character_id');
             $identity = null;
-            if ($charId && ($c = RpCharacter::find($charId))) {
-                $identity = self::identity($c, (int) $post->user_id);
+            // Only a role-play topic shows characters — regular topics stay clean.
+            if (self::isRpTopic((int) $post->topic_id)) {
+                $charId = DB::table('rp_post_character')->where('post_id', $post->id)->value('character_id');
+                if ($charId && ($c = RpCharacter::find($charId))) {
+                    $identity = self::identity($c, (int) $post->user_id);
+                }
             }
 
             return self::$identityCache[$post->id] = $identity;
@@ -275,6 +293,49 @@ class Extension extends ServiceProvider
                     'avatar' => $c->avatar_path,
                 ])->all(),
             ]);
+        });
+
+        // Role-play context for the composer + topic page: is this a role-play
+        // topic/category, may the viewer toggle it, and their characters.
+        Route::middleware(['web', 'auth'])->get('/api/ext/rp/context', function (Request $request) {
+            $topicId = (int) $request->query('topic', 0);
+            $slug = (string) $request->query('slug', '');
+            if (! $topicId && $slug !== '') {
+                $topicId = (int) DB::table('topics')->where('slug', $slug)->value('id');
+            }
+            $catRaw = $request->query('category');
+            $catId = ($catRaw !== null && $catRaw !== '') ? (int) $catRaw : null;
+
+            $canToggle = false;
+            if ($topicId) {
+                $rp = self::isRpTopic($topicId);
+                $owner = DB::table('topics')->where('id', $topicId)->value('user_id');
+                $canToggle = $owner !== null && (self::canModerate() || (int) $owner === (int) Auth::id());
+            } else {
+                $rp = self::categoryIsRp($catId);
+            }
+
+            $characters = [];
+            if ($rp) {
+                $characters = RpCharacter::where('user_id', Auth::id())->where('status', 'approved')
+                    ->orderBy('name')->get()
+                    ->map(fn (RpCharacter $c) => [
+                        'id' => $c->id, 'name' => $c->name, 'slug' => $c->slug,
+                        'initials' => $c->initials(), 'color' => $c->color ?: (($c->id % 6) + 1), 'avatar' => $c->avatar_path,
+                    ])->all();
+            }
+
+            return response()->json(['rp' => $rp, 'canToggle' => $canToggle, 'topicId' => $topicId ?: null, 'characters' => $characters]);
+        });
+
+        // Author or staff flip a topic between role-play and regular (explicit override).
+        Route::middleware(['web', 'auth'])->post('/api/ext/rp/topic/{topic}/rp', function (Request $request, int $topic) {
+            $owner = DB::table('topics')->where('id', $topic)->value('user_id');
+            abort_unless($owner !== null && (self::canModerate() || (int) $owner === (int) Auth::id()), 403);
+            $rp = $request->boolean('rp');
+            DB::table('rp_topics')->updateOrInsert(['topic_id' => $topic], ['is_rp' => $rp ? 1 : 0]);
+
+            return response()->json(['ok' => true, 'rp' => $rp]);
         });
 
         Route::middleware(['web', 'auth'])->group(function () {
@@ -784,16 +845,16 @@ class Extension extends ServiceProvider
             $rows = '<p class="rp-muted">No characters waiting for review.</p>';
         }
 
-        $ooc = self::oocCategoryIds();
+        $rpCats = self::rpCategoryIds();
         $cats = \App\Models\Category::orderBy('name')->get(['id', 'name']);
         $checks = '';
         foreach ($cats as $cat) {
-            $on = in_array((int) $cat->id, $ooc, true) ? ' checked' : '';
+            $on = in_array((int) $cat->id, $rpCats, true) ? ' checked' : '';
             $checks .= '<label class="rp-chk"><input type="checkbox" value="'.$cat->id.'"'.$on.'> '.$e($cat->name).'</label>';
         }
-        $icNote = $ooc === []
-            ? 'Members can post as a character in every board. Tick a board to make it out-of-character (real account only).'
-            : 'Posting as a character is turned off in the ticked boards.';
+        $icNote = $rpCats === []
+            ? 'Tick the categories that are role-play boards. Every topic in them becomes a role-play thread (members can post as a character there). Authors can also flag an individual topic.'
+            : 'Topics in the ticked categories are role-play threads. Authors can override per topic.';
 
         // Character-sheet field builder.
         $typeOpts = ['text' => 'Text', 'number' => 'Number', 'textarea' => 'Paragraph', 'select' => 'Choice'];
@@ -821,10 +882,10 @@ class Extension extends ServiceProvider
           </section>
 
           <section class="rp-sec">
-            <h2 class="rp-h2">Out-of-character boards</h2>
+            <h2 class="rp-h2">Role-play categories</h2>
             <p class="rp-muted rp-ic-note">{$icNote}</p>
             <div class="rp-checks">{$checks}</div>
-            <button id="rp-save-ic" class="rp-btn rp-ok">Save boards</button>
+            <button id="rp-save-ic" class="rp-btn rp-ok">Save categories</button>
             <span id="rp-ic-status" class="rp-muted"></span>
           </section>
 
