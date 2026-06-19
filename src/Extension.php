@@ -31,7 +31,69 @@ class Extension extends ServiceProvider
     {
         $this->registerIdentityResolver();
         $this->registerPostCapture();
+        $this->registerDiceRoller();
         $this->registerRoutes();
+    }
+
+    /**
+     * Evaluate inline dice once, at post creation. A token like [[2d6+3]] is
+     * rolled server-side with random_int, logged immutably to rp_rolls, and
+     * replaced in the stored body with a result badge — so it renders identically
+     * everywhere and can never be re-rolled by editing.
+     */
+    private function registerDiceRoller(): void
+    {
+        Post::created(function (Post $post) {
+            $html = (string) $post->body_html;
+            if (! str_contains($html, '[[')) {
+                return;
+            }
+            if (DB::table('rp_rolls')->where('post_id', $post->id)->exists()) {
+                return; // already rolled (defensive against a double event)
+            }
+
+            $idx = 0;
+            $rolls = [];
+            $e = fn ($v) => htmlspecialchars((string) $v, ENT_QUOTES);
+            $new = preg_replace_callback('/\[\[\s*([0-9dD]+(?:\s*[+-]\s*\d+)?)\s*\]\]/', function ($m) use (&$idx, &$rolls, $post, $e) {
+                $expr = strtolower(preg_replace('/\s+/', '', $m[1]));
+                if (! preg_match('/^(\d*)d(\d+)([+-]\d+)?$/', $expr, $p)) {
+                    return $m[0]; // not a dice expression — leave the text untouched
+                }
+                $count = $p[1] === '' ? 1 : (int) $p[1];
+                $sides = (int) $p[2];
+                $mod = ($p[3] ?? '') !== '' ? (int) $p[3] : 0;
+                if ($count < 1 || $count > 100 || $sides < 2 || $sides > 1000 || $idx >= 30) {
+                    return $m[0]; // out of sane bounds — leave as typed
+                }
+                $dice = [];
+                for ($i = 0; $i < $count; $i++) {
+                    $dice[] = random_int(1, $sides);
+                }
+                $total = array_sum($dice) + $mod;
+                $rolls[] = [
+                    'post_id' => $post->id,
+                    'idx' => $idx++,
+                    'expr' => $expr,
+                    'total' => $total,
+                    'detail' => json_encode($dice),
+                    'created_at' => now(),
+                ];
+                $modText = $mod ? ($mod > 0 ? ' +'.$mod : ' '.$mod) : '';
+                $title = $expr.' → ['.implode(', ', $dice).']'.$modText;
+
+                return '<span class="rp-roll" title="'.$e($title).'">🎲 '.$e($expr).' = <b>'.$total.'</b></span>';
+            }, $html);
+
+            if (! $rolls) {
+                return;
+            }
+            DB::table('rp_rolls')->insert($rolls);
+            DB::table('posts')->where('id', $post->id)->update(['body_html' => $new]);
+            // Sync the in-memory model so the post-create broadcast shows the rolled body.
+            $post->body_html = $new;
+            $post->syncOriginal();
+        });
     }
 
     /**

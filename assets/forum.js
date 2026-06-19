@@ -19,6 +19,18 @@
     document.cookie = COOKIE + '=' + encodeURIComponent(v) + '; path=/; max-age=' + YEAR + '; samesite=lax';
   }
 
+  // Dice-roll badges in post bodies (rendered server-side at post time).
+  if (!document.getElementById('rp-roll-style')) {
+    var rollStyle = document.createElement('style');
+    rollStyle.id = 'rp-roll-style';
+    rollStyle.textContent =
+      '.rp-roll{display:inline-flex;align-items:center;gap:4px;font-size:.92em;font-weight:600;line-height:1.4;' +
+      'background:rgba(91,91,214,.12);color:rgb(var(--c-primary));border:1px solid rgba(91,91,214,.28);' +
+      'padding:0 7px;border-radius:6px;white-space:nowrap;vertical-align:baseline}' +
+      '.rp-roll b{font-weight:800}';
+    document.head.appendChild(rollStyle);
+  }
+
   // Inject styles once.
   if (!document.getElementById('rp-as-style')) {
     var style = document.createElement('style');
