@@ -23,7 +23,7 @@
       "label": "Approve new characters automatically",
       "type": "boolean",
       "default": true,
-      "help": "When off, new characters wait in a staff queue (Manage role-play) before they can be used."
+      "help": "When off, new characters wait for staff approval. Review the queue and choose in-character boards at /rp/staff (staff only)."
     },
     {
       "key": "reveal_account",
@@ -41,7 +41,6 @@
       "baseline": false
     }
   ],
-  "admin_url": "/rp/staff",
   "icon": "icon.svg",
   "premium": false,
   "price": 0
