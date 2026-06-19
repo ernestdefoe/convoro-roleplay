@@ -19,6 +19,13 @@
       "help": "How many characters each member may create. Set to 0 for unlimited."
     },
     {
+      "key": "auto_approve",
+      "label": "Approve new characters automatically",
+      "type": "boolean",
+      "default": true,
+      "help": "When off, new characters wait in a staff queue (Manage role-play) before they can be used."
+    },
+    {
       "key": "reveal_account",
       "label": "Show the controlling account on character profiles",
       "type": "boolean",
@@ -26,6 +33,15 @@
       "help": "Adds a “Played by” line to each character profile so members can see who is behind a character."
     }
   ],
+  "permissions": [
+    {
+      "key": "roleplay.moderate",
+      "label": "Approve characters & manage in-character boards",
+      "category": "Role-Play",
+      "baseline": false
+    }
+  ],
+  "admin_url": "/rp/staff",
   "icon": "icon.svg",
   "premium": false,
   "price": 0
