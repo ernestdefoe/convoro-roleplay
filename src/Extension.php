@@ -152,6 +152,21 @@ class Extension extends ServiceProvider
         return (bool) Auth::user()?->hasPermission('roleplay.moderate');
     }
 
+    /** Accept an image URL only if it's same-origin (our uploader's output). */
+    private static function safeImageUrl(?string $v): ?string
+    {
+        $v = trim((string) $v);
+        if ($v === '') {
+            return null;
+        }
+        $origin = rtrim(url('/'), '/');
+        if (str_starts_with($v, '/') || str_starts_with($v, $origin)) {
+            return mb_substr($v, 0, 500);
+        }
+
+        return null; // reject external URLs (no hotlinking foreign images)
+    }
+
     /** Staff-defined character-sheet schema: ordered list of {key,label,type,options}. */
     private static function sheetSchema(): array
     {
@@ -270,6 +285,8 @@ class Extension extends ServiceProvider
                     'bio' => 'nullable|string|max:5000',
                     'claim' => 'nullable|string|max:120',
                     'fields' => 'nullable|array',
+                    'avatar' => 'nullable|string|max:500',
+                    'hero' => 'nullable|string|max:500',
                 ]);
 
                 // Enforce the per-member cap (0 = unlimited).
@@ -289,6 +306,8 @@ class Extension extends ServiceProvider
                     'bio' => $data['bio'] ?? null,
                     'claim' => $data['claim'] ?? null,
                     'fields' => self::filterSheetValues($data['fields'] ?? []),
+                    'avatar_path' => self::safeImageUrl($data['avatar'] ?? null),
+                    'hero_path' => self::safeImageUrl($data['hero'] ?? null),
                     'status' => $auto ? 'approved' : 'pending',
                 ]);
 
@@ -309,12 +328,16 @@ class Extension extends ServiceProvider
                     'bio' => 'nullable|string|max:5000',
                     'claim' => 'nullable|string|max:120',
                     'fields' => 'nullable|array',
+                    'avatar' => 'nullable|string|max:500',
+                    'hero' => 'nullable|string|max:500',
                 ]);
                 $c->update([
                     'name' => $data['name'],
                     'bio' => $data['bio'] ?? null,
                     'claim' => $data['claim'] ?? null,
                     'fields' => self::filterSheetValues($data['fields'] ?? []),
+                    'avatar_path' => self::safeImageUrl($data['avatar'] ?? null),
+                    'hero_path' => self::safeImageUrl($data['hero'] ?? null),
                 ]);
 
                 return response()->json(['ok' => true, 'slug' => $c->slug]);
@@ -496,10 +519,13 @@ class Extension extends ServiceProvider
         }
 
         $color = $c->color ?: (($c->id % 6) + 1);
+        $banner = $c->hero_path
+            ? '<div class="rp-banner" style="background-image:url('.$e($c->hero_path).');background-size:cover;background-position:center"></div>'
+            : '<div class="rp-banner rp-g'.$color.'"></div>';
         $body = <<<HTML
         <div class="rp-profile">
           <div class="rp-card2">
-            <div class="rp-banner rp-g{$color}"></div>
+            {$banner}
             <div class="rp-head">
               {$avatar}
               <div class="rp-head-meta">
@@ -596,7 +622,9 @@ class Extension extends ServiceProvider
                 .' data-name="'.$e(Str::lower($c->name)).'"'
                 .' data-claim="'.$e(Str::lower((string) $c->claim)).'"'
                 .' data-posts="'.(int) $c->post_count.'" data-active="'.$active.'">'
-                .'<div class="rp-card-top rp-g'.$color.'"></div>'
+                .($c->hero_path
+                    ? '<div class="rp-card-top" style="background-image:url('.$e($c->hero_path).');background-size:cover;background-position:center"></div>'
+                    : '<div class="rp-card-top rp-g'.$color.'"></div>')
                 .'<div class="rp-card-av">'.$av.'</div>'
                 .'<div class="rp-card-body">'
                 .'<div class="rp-card-name">'.$e($c->name).'</div>'
@@ -922,6 +950,32 @@ class Extension extends ServiceProvider
         return $h.'</div>';
     }
 
+    /** An avatar/hero image picker (uploads via the core image endpoint). */
+    private static function imageField(string $kind, string $label, ?string $current, callable $e): string
+    {
+        $cls = $kind === 'hero' ? 'rp-up-hero' : 'rp-up-avatar';
+        $bg = $current ? ' style="background-image:url('.$e($current).')"' : '';
+        $plus = $current ? '' : '<span class="rp-up-plus">+</span>';
+        $clear = ' style="'.($current ? '' : 'display:none').'"';
+
+        return '<div class="rp-up '.$cls.'">'
+            .'<div class="rp-up-label">'.$e($label).'</div>'
+            .'<button type="button" class="rp-up-prev" data-target="'.$kind.'"'.$bg.'>'.$plus.'</button>'
+            .'<button type="button" class="rp-up-clear" data-target="'.$kind.'"'.$clear.'>Remove</button>'
+            .'<input type="hidden" name="'.$kind.'" value="'.$e($current).'">'
+            .'</div>';
+    }
+
+    /** Both image pickers + the shared file input, for one character form. */
+    private static function uploadsBlock(?string $avatar, ?string $hero, callable $e): string
+    {
+        return '<div class="rp-uploads">'
+            .self::imageField('avatar', 'Avatar', $avatar, $e)
+            .self::imageField('hero', 'Hero image', $hero, $e)
+            .'</div>'
+            .'<input type="file" class="rp-up-file" accept="image/png,image/jpeg,image/gif,image/webp" hidden>';
+    }
+
     /** Member page: create + edit your own characters (and fill their sheets). */
     private static function myCharactersPage()
     {
@@ -938,6 +992,7 @@ class Extension extends ServiceProvider
             $view = $c->status === 'approved' ? '<a class="rp-cf-view" href="/characters/'.$e($c->slug).'">View profile →</a>' : '';
             $forms .= '<form class="rp-cform" data-id="'.$c->id.'">'
                 .'<div class="rp-cf-head"><h2 class="rp-cf-title">'.$e($c->name).'</h2>'.$badge.'</div>'
+                .self::uploadsBlock($c->avatar_path, $c->hero_path, $e)
                 .'<label class="rp-cf-l">Name<input name="name" required value="'.$e($c->name).'"></label>'
                 .'<label class="rp-cf-l">Face / canon claim<input name="claim" value="'.$e($c->claim).'"></label>'
                 .'<label class="rp-cf-l">About<textarea name="bio" rows="3">'.$e($c->bio).'</textarea></label>'
@@ -954,6 +1009,7 @@ class Extension extends ServiceProvider
             $note = $auto ? '' : '<p class="rp-muted rp-cf-note">New characters are reviewed by staff before they can post.</p>';
             $newForm = '<form class="rp-cform rp-cnew" data-id="">'
                 .'<div class="rp-cf-head"><h2 class="rp-cf-title">New character</h2></div>'.$note
+                .self::uploadsBlock(null, null, $e)
                 .'<label class="rp-cf-l">Name<input name="name" required placeholder="Character name"></label>'
                 .'<label class="rp-cf-l">Face / canon claim<input name="claim" placeholder="e.g. Zendaya"></label>'
                 .'<label class="rp-cf-l">About<textarea name="bio" rows="3"></textarea></label>'
@@ -995,16 +1051,60 @@ class Extension extends ServiceProvider
         .rp-ok{background:rgb(var(--c-primary));border-color:rgb(var(--c-primary));color:#fff}
         .rp-cf-msg{font-size:13px;color:rgb(var(--c-muted))}
         .rp-cf-view{margin-left:auto;font-size:13px;color:rgb(var(--c-primary));text-decoration:none}
+        .rp-uploads{display:flex;gap:16px;margin-bottom:16px;flex-wrap:wrap}
+        .rp-up{display:flex;flex-direction:column;gap:6px}
+        .rp-up-hero{flex:1;min-width:200px}
+        .rp-up-label{font-size:13px;font-weight:600;color:rgb(var(--c-text-2))}
+        .rp-up-prev{padding:0;border:1px dashed rgb(var(--c-border));border-radius:12px;cursor:pointer;
+          background-color:rgb(var(--c-surface-2));background-size:cover;background-position:center;
+          color:rgb(var(--c-muted));font-size:26px;display:flex;align-items:center;justify-content:center;overflow:hidden}
+        .rp-up-prev:hover{border-color:rgb(var(--c-primary))}
+        .rp-up-avatar .rp-up-prev{width:88px;height:88px;border-radius:var(--c-avatar-radius,12px)}
+        .rp-up-hero .rp-up-prev{width:100%;height:88px}
+        .rp-up-prev.rp-up-busy{opacity:.5}
+        .rp-up-clear{align-self:flex-start;border:none;background:none;color:rgb(var(--c-muted));font-size:12px;cursor:pointer;padding:0;text-decoration:underline}
+        .rp-up-clear:hover{color:#dc2626}
         CSS;
 
         $js = <<<'JS'
         document.querySelectorAll('.rp-cform').forEach(function (form) {
+          var file = form.querySelector('.rp-up-file');
+          form.querySelectorAll('.rp-up-prev').forEach(function (prev) {
+            prev.addEventListener('click', function () { form.dataset.upTarget = prev.getAttribute('data-target'); file.click(); });
+          });
+          form.querySelectorAll('.rp-up-clear').forEach(function (cl) {
+            cl.addEventListener('click', function () {
+              var t = cl.getAttribute('data-target');
+              form.querySelector('input[name="' + t + '"]').value = '';
+              var prev = form.querySelector('.rp-up-prev[data-target="' + t + '"]');
+              prev.style.backgroundImage = ''; prev.innerHTML = '<span class="rp-up-plus">+</span>';
+              cl.style.display = 'none';
+            });
+          });
+          file && file.addEventListener('change', function () {
+            var f = file.files && file.files[0]; if (!f) return;
+            var t = form.dataset.upTarget || 'avatar';
+            var prev = form.querySelector('.rp-up-prev[data-target="' + t + '"]');
+            prev.classList.add('rp-up-busy');
+            var fd = new FormData(); fd.append('file', f);
+            fetch('/uploads/image', { method: 'POST', headers: { 'X-CSRF-TOKEN': csrf, Accept: 'application/json' }, credentials: 'same-origin', body: fd })
+              .then(function (r) { return r.ok ? r.json() : Promise.reject(); })
+              .then(function (d) {
+                form.querySelector('input[name="' + t + '"]').value = d.url;
+                prev.style.backgroundImage = 'url(' + d.url + ')'; prev.innerHTML = '';
+                var cl = form.querySelector('.rp-up-clear[data-target="' + t + '"]'); if (cl) cl.style.display = '';
+              })
+              .catch(function () { alert('Upload failed — try a smaller image (max 8MB).'); })
+              .finally(function () { prev.classList.remove('rp-up-busy'); file.value = ''; });
+          });
+
           form.addEventListener('submit', function (ev) {
             ev.preventDefault();
             var id = form.getAttribute('data-id');
             var msg = form.querySelector('.rp-cf-msg');
             function v(sel) { var el = form.querySelector(sel); return el ? el.value : ''; }
-            var payload = { name: v('[name="name"]'), claim: v('[name="claim"]'), bio: v('[name="bio"]'), fields: {} };
+            var payload = { name: v('[name="name"]'), claim: v('[name="claim"]'), bio: v('[name="bio"]'),
+              avatar: v('input[name="avatar"]'), hero: v('input[name="hero"]'), fields: {} };
             if (!payload.name.trim()) { msg.textContent = 'Name is required.'; return; }
             form.querySelectorAll('[name^="field_"]').forEach(function (el) { payload.fields[el.name.slice(6)] = el.value; });
             msg.textContent = 'Saving…';

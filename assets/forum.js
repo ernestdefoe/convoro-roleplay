@@ -43,7 +43,25 @@
       '.rp-ic-badge{position:absolute;top:14px;right:16px;display:inline-flex;align-items:center;gap:4px;' +
       'font-size:11px;font-weight:700;letter-spacing:.02em;color:rgb(var(--c-primary));' +
       'background:rgba(91,91,214,.12);border:1px solid rgba(91,91,214,.28);padding:2px 9px;' +
-      'border-radius:999px;pointer-events:none;z-index:2}';
+      'border-radius:999px;pointer-events:none;z-index:2}' +
+      // dice button in the composer toolbar
+      '.rp-dice{position:relative;display:inline-flex}' +
+      '.rp-dice-btn{display:inline-flex;align-items:center;justify-content:center;width:30px;height:30px;' +
+      'border-radius:8px;border:none;background:transparent;color:rgb(var(--c-muted));cursor:pointer}' +
+      '.rp-dice-btn:hover{background:rgb(var(--c-surface));color:rgb(var(--c-text))}' +
+      '.rp-dice-btn svg{width:18px;height:18px}' +
+      '.rp-dice-pop{position:absolute;top:36px;right:0;z-index:50;width:236px;padding:12px;' +
+      'background:rgb(var(--c-surface));border:1px solid rgb(var(--c-border));border-radius:12px;' +
+      'box-shadow:0 14px 34px -12px rgba(0,0,0,.45)}' +
+      '.rp-dice-row{display:flex;align-items:center;gap:6px}' +
+      '.rp-dice-n,.rp-dice-m{width:50px}' +
+      '.rp-dice-n,.rp-dice-m,.rp-dice-d{font:inherit;font-size:13px;padding:7px 8px;border-radius:8px;' +
+      'border:1px solid rgb(var(--c-border));background:rgb(var(--c-surface));color:rgb(var(--c-text))}' +
+      '.rp-dice-d{flex:1}' +
+      '.rp-dice-foot{display:flex;align-items:center;justify-content:space-between;margin-top:11px}' +
+      '.rp-dice-prev{font-size:14px;font-weight:800;color:rgb(var(--c-primary))}' +
+      '.rp-dice-go{font:inherit;font-size:13px;font-weight:600;padding:7px 13px;border-radius:8px;' +
+      'border:none;background:rgb(var(--c-primary));color:#fff;cursor:pointer}';
     document.head.appendChild(gStyle);
   }
 
@@ -148,6 +166,86 @@
       });
 
       return function () { if (el.contains(wrap)) el.removeChild(wrap); };
+    },
+  });
+
+  var DICE_SVG =
+    '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round">' +
+    '<rect x="3" y="3" width="18" height="18" rx="4"/>' +
+    '<circle cx="8.5" cy="8.5" r="1.3" fill="currentColor" stroke="none"/>' +
+    '<circle cx="15.5" cy="8.5" r="1.3" fill="currentColor" stroke="none"/>' +
+    '<circle cx="12" cy="12" r="1.3" fill="currentColor" stroke="none"/>' +
+    '<circle cx="8.5" cy="15.5" r="1.3" fill="currentColor" stroke="none"/>' +
+    '<circle cx="15.5" cy="15.5" r="1.3" fill="currentColor" stroke="none"/></svg>';
+
+  // Dice button — builds an [[XdY+N]] token and drops it at the cursor, so the
+  // server-side roller evaluates it on post. No need to remember the syntax.
+  c.registerSlot('composer:toolbar', {
+    ext: 'convoro-roleplay',
+    order: 45,
+    mount: function (el, ctx) {
+      var insert = ctx && ctx.props && ctx.props.insertText;
+      if (typeof insert !== 'function') return;
+
+      var box = document.createElement('div');
+      box.className = 'rp-dice';
+      var btn = document.createElement('button');
+      btn.type = 'button';
+      btn.className = 'rp-dice-btn';
+      btn.title = 'Insert a dice roll';
+      btn.setAttribute('aria-label', 'Insert a dice roll');
+      btn.innerHTML = DICE_SVG;
+      box.appendChild(btn);
+
+      var pop = document.createElement('div');
+      pop.className = 'rp-dice-pop';
+      pop.style.display = 'none';
+      pop.innerHTML =
+        '<div class="rp-dice-row">' +
+          '<input class="rp-dice-n" type="number" min="1" max="100" value="1" aria-label="Number of dice">' +
+          '<select class="rp-dice-d" aria-label="Die">' +
+            '<option>d4</option><option>d6</option><option>d8</option><option>d10</option>' +
+            '<option>d12</option><option selected>d20</option><option>d100</option>' +
+          '</select>' +
+          '<input class="rp-dice-m" type="number" value="0" aria-label="Modifier" title="Modifier">' +
+        '</div>' +
+        '<div class="rp-dice-foot"><span class="rp-dice-prev">1d20</span>' +
+        '<button type="button" class="rp-dice-go">Insert</button></div>';
+      box.appendChild(pop);
+      el.appendChild(box);
+
+      var nEl = pop.querySelector('.rp-dice-n');
+      var dEl = pop.querySelector('.rp-dice-d');
+      var mEl = pop.querySelector('.rp-dice-m');
+      var prev = pop.querySelector('.rp-dice-prev');
+
+      function expr() {
+        var n = Math.max(1, Math.min(100, parseInt(nEl.value, 10) || 1));
+        var m = parseInt(mEl.value, 10) || 0;
+        var s = n + dEl.value;
+        if (m > 0) s += '+' + m; else if (m < 0) s += m;
+        return s;
+      }
+      function refresh() { prev.textContent = expr(); }
+      [nEl, dEl, mEl].forEach(function (x) { x.addEventListener('input', refresh); x.addEventListener('change', refresh); });
+      refresh();
+
+      function onDoc(ev) { if (!box.contains(ev.target)) closePop(); }
+      function closePop() { pop.style.display = 'none'; document.removeEventListener('click', onDoc, true); }
+      btn.addEventListener('click', function (ev) {
+        ev.preventDefault();
+        if (pop.style.display !== 'none') { closePop(); return; }
+        pop.style.display = '';
+        refresh();
+        setTimeout(function () { document.addEventListener('click', onDoc, true); }, 0);
+      });
+      pop.querySelector('.rp-dice-go').addEventListener('click', function (ev) {
+        ev.preventDefault();
+        insert('[[' + expr() + ']] ');
+        closePop();
+      });
+
+      return function () { closePop(); if (el.contains(box)) el.removeChild(box); };
     },
   });
 })();
