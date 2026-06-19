@@ -29,7 +29,37 @@ class Extension extends ServiceProvider
     public function boot(): void
     {
         $this->registerIdentityResolver();
+        $this->registerPostCapture();
         $this->registerRoutes();
+    }
+
+    /**
+     * When a post is created while an "active character" is selected (the composer
+     * sets an `rp_as` cookie), link the post to that character. Eloquent's created
+     * event means no core change is needed; raw $_COOKIE read sidesteps Laravel's
+     * cookie encryption for this non-sensitive, ownership-validated id.
+     */
+    private function registerPostCapture(): void
+    {
+        Post::created(function (Post $post) {
+            $raw = $_COOKIE['rp_as'] ?? null;
+            if (! $raw) {
+                return;
+            }
+            $c = RpCharacter::where('id', (int) $raw)
+                ->where('user_id', $post->user_id)
+                ->where('status', 'approved')
+                ->first();
+            if (! $c) {
+                return;
+            }
+            DB::table('rp_post_character')->updateOrInsert(
+                ['post_id' => $post->id],
+                ['character_id' => $c->id, 'created_at' => now()]
+            );
+            $c->increment('post_count');
+            $c->forceFill(['last_active_at' => now()])->save();
+        });
     }
 
     /** Render a post's author as its role-play character, when one is set. */
