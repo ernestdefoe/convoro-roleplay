@@ -1,0 +1,16 @@
+{
+  "id": "convoro-roleplay",
+  "name": "Role-Play",
+  "version": "0.1.0",
+  "description": "Turn Convoro into a role-play forum: members create characters and post as them. Multi-character accounts, applications & claims, in-character boards, character sheets & dice, trackers, and a live shoutbox — a polished, free first-party extension.",
+  "author": "Convoro",
+  "convoro": ">=1.40.0",
+  "type": "extension",
+  "namespace": "Convoro\\Ext\\Roleplay\\",
+  "provider": "Convoro\\Ext\\Roleplay\\Extension",
+  "migrations": "migrations",
+  "assets": { "forum": "assets/forum.js", "admin": "assets/admin.js" },
+  "icon": "icon.svg",
+  "premium": false,
+  "price": 0
+}
