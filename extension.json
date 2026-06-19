@@ -10,6 +10,22 @@
   "provider": "Convoro\\Ext\\Roleplay\\Extension",
   "migrations": "migrations",
   "assets": { "forum": "assets/forum.js", "admin": "assets/admin.js" },
+  "settings": [
+    {
+      "key": "max_per_user",
+      "label": "Characters per member",
+      "type": "number",
+      "default": 3,
+      "help": "How many characters each member may create. Set to 0 for unlimited."
+    },
+    {
+      "key": "reveal_account",
+      "label": "Show the controlling account on character profiles",
+      "type": "boolean",
+      "default": true,
+      "help": "Adds a “Played by” line to each character profile so members can see who is behind a character."
+    }
+  ],
   "icon": "icon.svg",
   "premium": false,
   "price": 0

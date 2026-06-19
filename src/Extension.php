@@ -3,6 +3,7 @@
 namespace Convoro\Ext\Roleplay;
 
 use App\Models\Post;
+use App\Support\ExtensionManager;
 use App\Support\ExtPage;
 use App\Support\PostIdentity;
 use Convoro\Ext\Roleplay\Models\RpCharacter;
@@ -127,6 +128,15 @@ class Extension extends ServiceProvider
                     'name' => 'required|string|max:80',
                     'bio' => 'nullable|string|max:5000',
                 ]);
+
+                // Enforce the per-member cap (0 = unlimited).
+                $max = (int) ExtensionManager::setting('convoro-roleplay', 'max_per_user', 3);
+                if ($max > 0 && RpCharacter::where('user_id', Auth::id())->count() >= $max) {
+                    return response()->json([
+                        'message' => "You can only have {$max} characters.",
+                    ], 422);
+                }
+
                 $slug = self::uniqueSlug($data['name']);
                 $c = RpCharacter::create([
                     'user_id' => Auth::id(),
@@ -196,6 +206,16 @@ class Extension extends ServiceProvider
 
         $bio = $c->bio ? '<p class="rp-bio">'.nl2br($e($c->bio)).'</p>' : '<p class="rp-muted">No bio yet.</p>';
 
+        // "Played by" — transparency line, toggled by the reveal_account setting.
+        $playedBy = '';
+        if (ExtensionManager::setting('convoro-roleplay', 'reveal_account', true)) {
+            $owner = \App\Models\User::find($c->user_id);
+            if ($owner) {
+                $oname = \App\Support\Username::display($owner->name, $owner->id);
+                $playedBy = '<div class="rp-muted rp-played">Played by <a href="/u/'.$owner->id.'">'.$e($oname).'</a></div>';
+            }
+        }
+
         $body = <<<HTML
         <div class="rp-profile">
           <div class="rp-head">
@@ -203,6 +223,7 @@ class Extension extends ServiceProvider
             <div>
               <h1 class="rp-name">{$e($c->name)}</h1>
               <div class="rp-muted">{$c->post_count} posts</div>
+              {$playedBy}
             </div>
           </div>
           {$bio}
@@ -215,6 +236,9 @@ class Extension extends ServiceProvider
         .rp-name{font-size:26px;font-weight:700;margin:0;color:rgb(var(--c-text))}
         .rp-muted{color:rgb(var(--c-muted));font-size:14px}
         .rp-bio{color:rgb(var(--c-text-2));line-height:1.7;margin:0}
+        .rp-played{margin-top:3px}
+        .rp-played a{color:rgb(var(--c-primary));text-decoration:none}
+        .rp-played a:hover{text-decoration:underline}
         .rp-mono{color:#fff}
         CSS;
 
