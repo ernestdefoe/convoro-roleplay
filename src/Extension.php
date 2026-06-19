@@ -296,8 +296,10 @@ class Extension extends ServiceProvider
         });
 
         // Role-play context for the composer + topic page: is this a role-play
-        // topic/category, may the viewer toggle it, and their characters.
-        Route::middleware(['web', 'auth'])->get('/api/ext/rp/context', function (Request $request) {
+        // topic/category, may the viewer toggle it, and their characters. Open to
+        // guests so the "role-play thread" badge shows for everyone (they just get
+        // no characters and can't toggle).
+        Route::middleware(['web'])->get('/api/ext/rp/context', function (Request $request) {
             $topicId = (int) $request->query('topic', 0);
             $slug = (string) $request->query('slug', '');
             if (! $topicId && $slug !== '') {
