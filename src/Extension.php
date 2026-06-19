@@ -442,7 +442,7 @@ class Extension extends ServiceProvider
         $e = fn ($v) => htmlspecialchars((string) $v, ENT_QUOTES);
         $avatar = $c->avatar_path
             ? '<img src="'.$e($c->avatar_path).'" alt="" style="width:96px;height:96px;border-radius:var(--c-avatar-radius);object-fit:cover">'
-            : '<div class="rp-mono av-g'.($c->color ?: (($c->id % 6) + 1)).'" style="width:96px;height:96px;border-radius:var(--c-avatar-radius);display:flex;align-items:center;justify-content:center;font-size:34px;font-weight:600">'.$e($c->initials()).'</div>';
+            : '<div class="rp-mono rp-g'.($c->color ?: (($c->id % 6) + 1)).'" style="width:96px;height:96px;border-radius:var(--c-avatar-radius);display:flex;align-items:center;justify-content:center;font-size:34px;font-weight:600">'.$e($c->initials()).'</div>';
 
         $bio = $c->bio ? '<p class="rp-bio">'.nl2br($e($c->bio)).'</p>' : '<p class="rp-muted">No bio yet.</p>';
 
@@ -495,15 +495,19 @@ class Extension extends ServiceProvider
             $sheet = '<section class="rp-sheet"><h2 class="rp-tr-h">Character sheet</h2><dl class="rp-sheet-dl">'.$sheetItems.'</dl></section>';
         }
 
+        $color = $c->color ?: (($c->id % 6) + 1);
         $body = <<<HTML
         <div class="rp-profile">
-          <div class="rp-head">
-            {$avatar}
-            <div>
-              <h1 class="rp-name">{$e($c->name)}</h1>
-              <div class="rp-muted">{$c->post_count} posts</div>
-              {$claimLine}
-              {$playedBy}
+          <div class="rp-card2">
+            <div class="rp-banner rp-g{$color}"></div>
+            <div class="rp-head">
+              {$avatar}
+              <div class="rp-head-meta">
+                <h1 class="rp-name">{$e($c->name)}</h1>
+                <div class="rp-muted">{$c->post_count} posts</div>
+                {$claimLine}
+                {$playedBy}
+              </div>
             </div>
           </div>
           {$bio}
@@ -513,9 +517,13 @@ class Extension extends ServiceProvider
         HTML;
 
         $css = <<<CSS
-        .rp-profile{max-width:760px;margin:0 auto;padding:24px 16px}
-        .rp-head{display:flex;gap:18px;align-items:center;margin-bottom:18px}
-        .rp-name{font-size:26px;font-weight:700;margin:0;color:rgb(var(--c-text))}
+        .rp-profile{max-width:760px;margin:0 auto;padding:24px 16px 48px}
+        .rp-card2{border:1px solid rgb(var(--c-border));border-radius:20px;overflow:hidden;background:rgb(var(--c-surface));margin-bottom:24px}
+        .rp-banner{height:120px}
+        .rp-head{display:flex;gap:20px;align-items:flex-end;padding:0 26px 22px;margin-top:-46px}
+        .rp-head>img,.rp-head>.rp-mono{flex-shrink:0;border:4px solid rgb(var(--c-surface));box-shadow:0 6px 18px -6px rgba(0,0,0,.45)}
+        .rp-head-meta{padding-bottom:2px;min-width:0}
+        .rp-name{font-size:28px;font-weight:800;letter-spacing:-.02em;margin:0;color:rgb(var(--c-text))}
         .rp-muted{color:rgb(var(--c-muted));font-size:14px}
         .rp-bio{color:rgb(var(--c-text-2));line-height:1.7;margin:0}
         .rp-claim{margin-top:4px;font-size:13px;color:rgb(var(--c-text-2))}
@@ -565,36 +573,43 @@ class Extension extends ServiceProvider
 
         $cards = '';
         foreach ($chars as $c) {
+            $color = $c->color ?: (($c->id % 6) + 1);
             $av = $c->avatar_path
                 ? '<img src="'.$e($c->avatar_path).'" alt="">'
-                : '<span class="rp-mono av-g'.($c->color ?: (($c->id % 6) + 1)).'">'.$e($c->initials()).'</span>';
+                : '<span class="rp-mono rp-g'.$color.'">'.$e($c->initials()).'</span>';
 
             $claim = '';
             if (filled($c->claim)) {
                 $dup = isset($dupes[Str::lower(trim($c->claim))]) ? ' rp-dup' : '';
                 $title = $dup ? ' title="This claim is used by more than one character"' : '';
-                $claim = '<div class="rp-d-claim'.$dup.'"'.$title.'>'.$e($c->claim).($dup ? ' ⚠' : '').'</div>';
+                $claim = '<span class="rp-chip'.$dup.'"'.$title.'>'.$e($c->claim).($dup ? ' ⚠' : '').'</span>';
             }
 
             $by = '';
             if ($reveal && ($o = $owners->get($c->user_id))) {
-                $by = '<div class="rp-d-by">'.$e(\App\Support\Username::display($o->name, $o->id)).'</div>';
+                $by = '<div class="rp-card-by">played by '.$e(\App\Support\Username::display($o->name, $o->id)).'</div>';
             }
 
             $active = $c->last_active_at ? $c->last_active_at->getTimestamp() : 0;
-            $activeLabel = $c->last_active_at ? 'active '.$c->last_active_at->diffForHumans() : 'no posts yet';
+            $activeLabel = $c->last_active_at ? $c->last_active_at->diffForHumans() : 'new';
             $cards .= '<a class="rp-card" href="/characters/'.$e($c->slug).'"'
                 .' data-name="'.$e(Str::lower($c->name)).'"'
                 .' data-claim="'.$e(Str::lower((string) $c->claim)).'"'
                 .' data-posts="'.(int) $c->post_count.'" data-active="'.$active.'">'
-                .'<div class="rp-d-av">'.$av.'</div>'
-                .'<div class="rp-d-meta"><div class="rp-d-name">'.$e($c->name).'</div>'.$claim.$by
-                .'<div class="rp-d-stat">'.(int) $c->post_count.' posts · '.$e($activeLabel).'</div>'
+                .'<div class="rp-card-top rp-g'.$color.'"></div>'
+                .'<div class="rp-card-av">'.$av.'</div>'
+                .'<div class="rp-card-body">'
+                .'<div class="rp-card-name">'.$e($c->name).'</div>'
+                .($claim !== '' ? '<div class="rp-card-claim">'.$claim.'</div>' : '')
+                .$by
+                .'<div class="rp-card-stats"><span class="rp-stat">'.(int) $c->post_count.' posts</span>'
+                .'<span class="rp-stat">'.$e($activeLabel).'</span></div>'
                 .'</div></a>';
         }
 
         if ($cards === '') {
-            $cards = '<p class="rp-muted">No characters yet.</p>';
+            $cards = '<div class="rp-blank"><div class="rp-blank-mask">🎭</div>'
+                .'<p class="rp-muted">No characters yet — be the first to create one.</p></div>';
         }
 
         $actions = '';
@@ -608,15 +623,16 @@ class Extension extends ServiceProvider
         $count = $chars->count();
         $body = <<<HTML
         <div class="rp-dir">
-          <div class="rp-d-bar">
-            <div>
+          <div class="rp-hero">
+            <div class="rp-hero-text">
+              <div class="rp-hero-eyebrow">🎭 The cast</div>
               <h1 class="rp-d-title">Characters</h1>
-              <div class="rp-muted rp-d-sub">{$count} character(s)</div>
+              <div class="rp-hero-sub">{$count} character(s) bringing the story to life.</div>
             </div>
             <div class="rp-d-actions">{$actions}</div>
           </div>
           <div class="rp-d-tools">
-            <input id="rp-search" class="rp-d-search" type="search" placeholder="Search name or claim…" autocomplete="off">
+            <input id="rp-search" class="rp-d-search" type="search" placeholder="Search by name or claim…" autocomplete="off">
             <select id="rp-sort" class="rp-d-sort">
               <option value="name">Name (A–Z)</option>
               <option value="active">Recently active</option>
@@ -629,33 +645,54 @@ class Extension extends ServiceProvider
         HTML;
 
         $css = <<<CSS
-        .rp-dir{max-width:900px;margin:0 auto;padding:24px 16px}
-        .rp-d-bar{display:flex;align-items:flex-start;justify-content:space-between;gap:12px}
-        .rp-d-title{font-size:26px;font-weight:700;margin:0;color:rgb(var(--c-text))}
-        .rp-d-sub{margin:2px 0 0}
+        .rp-dir{max-width:960px;margin:0 auto;padding:24px 16px 48px}
+        .rp-hero{position:relative;display:flex;align-items:flex-end;justify-content:space-between;gap:16px;
+          padding:26px 26px 24px;margin-bottom:18px;border-radius:20px;overflow:hidden;
+          border:1px solid rgb(var(--c-border));
+          background:
+            radial-gradient(120% 140% at 0% 0%, rgba(91,91,214,.16), transparent 55%),
+            radial-gradient(120% 160% at 100% 0%, rgba(168,85,247,.14), transparent 50%),
+            rgb(var(--c-surface))}
+        .rp-hero-eyebrow{font-size:12px;font-weight:700;letter-spacing:.06em;text-transform:uppercase;color:rgb(var(--c-primary));margin-bottom:6px}
+        .rp-d-title{font-size:32px;font-weight:800;letter-spacing:-.02em;margin:0;color:rgb(var(--c-text))}
+        .rp-hero-sub{margin-top:6px;font-size:14px;color:rgb(var(--c-muted))}
         .rp-muted{color:rgb(var(--c-muted));font-size:14px}
-        .rp-btn{font:inherit;font-size:13px;font-weight:600;padding:7px 13px;border-radius:var(--c-radius,8px);
-          border:1px solid rgb(var(--c-border));background:rgb(var(--c-surface));color:rgb(var(--c-text));cursor:pointer;text-decoration:none;white-space:nowrap}
+        .rp-btn{font:inherit;font-size:13px;font-weight:600;padding:8px 14px;border-radius:999px;
+          border:1px solid rgb(var(--c-border));background:rgb(var(--c-surface));color:rgb(var(--c-text));cursor:pointer;text-decoration:none;white-space:nowrap;transition:border-color .15s,transform .15s}
+        .rp-btn:hover{border-color:rgb(var(--c-primary));transform:translateY(-1px)}
         .rp-ok{background:rgb(var(--c-primary));border-color:rgb(var(--c-primary));color:#fff}
         .rp-d-actions{display:flex;gap:8px;flex-shrink:0}
-        .rp-d-tools{display:flex;gap:8px;margin:16px 0}
-        .rp-d-search{flex:1;font:inherit;font-size:14px;padding:8px 11px;border-radius:var(--c-radius,8px);
+        .rp-d-tools{display:flex;gap:8px;margin:0 0 18px}
+        .rp-d-search{flex:1;font:inherit;font-size:14px;padding:10px 14px;border-radius:999px;
           border:1px solid rgb(var(--c-border));background:rgb(var(--c-surface));color:rgb(var(--c-text))}
-        .rp-d-sort{font:inherit;font-size:13px;padding:8px 10px;border-radius:var(--c-radius,8px);
+        .rp-d-search:focus{outline:none;border-color:rgb(var(--c-primary))}
+        .rp-d-sort{font:inherit;font-size:13px;padding:10px 14px;border-radius:999px;
           border:1px solid rgb(var(--c-border));background:rgb(var(--c-surface));color:rgb(var(--c-text));cursor:pointer}
-        .rp-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(240px,1fr));gap:12px}
-        .rp-card{display:flex;gap:12px;align-items:center;padding:12px;border:1px solid rgb(var(--c-border));
-          border-radius:var(--c-radius,10px);background:rgb(var(--c-surface));text-decoration:none}
-        .rp-card:hover{border-color:rgb(var(--c-primary))}
-        .rp-d-av img,.rp-d-av .rp-mono{width:48px;height:48px;border-radius:var(--c-avatar-radius);object-fit:cover;
-          display:flex;align-items:center;justify-content:center;font-weight:600;color:#fff}
-        .rp-d-meta{min-width:0}
-        .rp-d-name{font-weight:600;color:rgb(var(--c-text))}
-        .rp-d-claim{font-size:12px;color:rgb(var(--c-text-2));margin-top:2px}
-        .rp-d-claim.rp-dup{color:#d97706}
-        .rp-d-by{font-size:12px;color:rgb(var(--c-muted));margin-top:2px}
-        .rp-d-stat{font-size:11px;color:rgb(var(--c-muted));margin-top:3px}
+        .rp-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(216px,1fr));gap:16px}
+        .rp-card{position:relative;display:block;border:1px solid rgb(var(--c-border));border-radius:16px;
+          background:rgb(var(--c-surface));overflow:hidden;text-decoration:none;
+          transition:transform .16s ease,box-shadow .16s ease,border-color .16s ease}
+        .rp-card:hover{transform:translateY(-4px);box-shadow:0 16px 34px -16px rgba(0,0,0,.45);border-color:rgb(var(--c-primary))}
+        .rp-card-top{height:60px}
+        .rp-card-top::after{content:"";position:absolute;top:0;left:0;right:0;height:60px;
+          background:linear-gradient(180deg,transparent,rgba(0,0,0,.12))}
+        .rp-card-av{position:relative;margin:-30px 0 0 18px;width:60px;height:60px;border-radius:var(--c-avatar-radius,50%);
+          border:3px solid rgb(var(--c-surface));overflow:hidden;z-index:1}
+        .rp-card-av img,.rp-card-av .rp-mono{width:100%;height:100%;object-fit:cover;
+          display:flex;align-items:center;justify-content:center;font-weight:700;font-size:21px;color:#fff}
+        .rp-card-body{padding:10px 18px 18px}
+        .rp-card-name{font-weight:700;font-size:15.5px;color:rgb(var(--c-text));line-height:1.25}
+        .rp-card-claim{margin-top:7px}
+        .rp-chip{display:inline-block;font-size:11px;font-weight:600;color:rgb(var(--c-text-2));
+          background:rgb(var(--c-surface-2));padding:3px 9px;border-radius:999px}
+        .rp-chip.rp-dup{color:#d97706;background:rgba(217,119,6,.13)}
+        .rp-card-by{margin-top:7px;font-size:12px;color:rgb(var(--c-muted))}
+        .rp-card-stats{margin-top:12px;display:flex;gap:6px;flex-wrap:wrap}
+        .rp-stat{font-size:11px;font-weight:500;color:rgb(var(--c-muted));background:rgb(var(--c-surface-2));padding:3px 9px;border-radius:7px}
+        .rp-blank{grid-column:1/-1;text-align:center;padding:48px 16px}
+        .rp-blank-mask{font-size:44px;opacity:.5;margin-bottom:8px}
         .rp-mono{color:#fff}
+        @media(max-width:560px){.rp-hero{flex-direction:column;align-items:flex-start}}
         CSS;
 
         $js = <<<'JS'
