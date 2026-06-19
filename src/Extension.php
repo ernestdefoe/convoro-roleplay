@@ -109,7 +109,7 @@ class Extension extends ServiceProvider
             if (! $raw) {
                 return;
             }
-            if (! self::isIcPost($post)) {
+            if (! self::postAsAllowed($post)) {
                 return; // out-of-character board — keep the real account
             }
             $c = RpCharacter::where('id', (int) $raw)
@@ -128,22 +128,22 @@ class Extension extends ServiceProvider
         });
     }
 
-    /** The category ids flagged in-character (empty = every board is IC). */
-    private static function icCategoryIds(): array
+    /** Category ids where posting as a character is turned OFF (out-of-character boards). */
+    private static function oocCategoryIds(): array
     {
         return DB::table('rp_ic_categories')->pluck('category_id')->map(fn ($v) => (int) $v)->all();
     }
 
-    /** Is this post in an in-character board? (No IC boards configured = all are.) */
-    private static function isIcPost(Post $post): bool
+    /** May a post be authored as a character? Yes everywhere except OOC boards. */
+    private static function postAsAllowed(Post $post): bool
     {
-        $ic = self::icCategoryIds();
-        if ($ic === []) {
-            return true;
+        $ooc = self::oocCategoryIds();
+        if ($ooc === []) {
+            return true; // no OOC boards configured — posting as a character works everywhere
         }
         $catId = DB::table('topics')->where('id', $post->topic_id)->value('category_id');
 
-        return $catId !== null && in_array((int) $catId, $ic, true);
+        return $catId === null || ! in_array((int) $catId, $ooc, true);
     }
 
     /** Does the current user hold the role-play moderation permission? */
@@ -512,10 +512,11 @@ class Extension extends ServiceProvider
             if ($v === null || $v === '') {
                 continue;
             }
-            $sheetItems .= '<div class="rp-sheet-row"><dt>'.$e($f['label']).'</dt><dd>'.nl2br($e($v)).'</dd></div>';
+            $sheetItems .= '<tr><th>'.$e($f['label']).'</th><td>'.nl2br($e($v)).'</td></tr>';
         }
         if ($sheetItems !== '') {
-            $sheet = '<section class="rp-sheet"><h2 class="rp-tr-h">Character sheet</h2><dl class="rp-sheet-dl">'.$sheetItems.'</dl></section>';
+            $sheet = '<section class="rp-sheet"><h2 class="rp-tr-h">Character sheet</h2>'
+                .'<table class="rp-sheet-table"><tbody>'.$sheetItems.'</tbody></table></section>';
         }
 
         $color = $c->color ?: (($c->id % 6) + 1);
@@ -559,10 +560,14 @@ class Extension extends ServiceProvider
         .rp-played a:hover{text-decoration:underline}
         .rp-tracker{margin-top:26px}
         .rp-sheet{margin-top:26px}
-        .rp-sheet-dl{margin:0;display:grid;grid-template-columns:max-content 1fr;gap:8px 18px}
-        .rp-sheet-row{display:contents}
-        .rp-sheet-row dt{font-size:13px;font-weight:600;color:rgb(var(--c-muted))}
-        .rp-sheet-row dd{margin:0;font-size:14px;color:rgb(var(--c-text-2))}
+        .rp-sheet-table{width:100%;border-collapse:separate;border-spacing:0;
+          border:1px solid rgb(var(--c-border));border-radius:12px;overflow:hidden}
+        .rp-sheet-table th,.rp-sheet-table td{padding:11px 16px;text-align:left;font-size:14px;
+          border-top:1px solid rgb(var(--c-border));vertical-align:top}
+        .rp-sheet-table tr:first-child th,.rp-sheet-table tr:first-child td{border-top:none}
+        .rp-sheet-table th{width:34%;font-weight:600;color:rgb(var(--c-text-2));
+          background:rgb(var(--c-surface-2));white-space:nowrap}
+        .rp-sheet-table td{color:rgb(var(--c-text));line-height:1.5}
         .rp-tr-h{font-size:15px;font-weight:700;margin:0 0 10px;color:rgb(var(--c-text))}
         .rp-thread{display:flex;align-items:center;justify-content:space-between;gap:12px;padding:10px 12px;
           border:1px solid rgb(var(--c-border));border-radius:var(--c-radius,8px);background:rgb(var(--c-surface));
@@ -779,16 +784,16 @@ class Extension extends ServiceProvider
             $rows = '<p class="rp-muted">No characters waiting for review.</p>';
         }
 
-        $ic = self::icCategoryIds();
+        $ooc = self::oocCategoryIds();
         $cats = \App\Models\Category::orderBy('name')->get(['id', 'name']);
         $checks = '';
         foreach ($cats as $cat) {
-            $on = in_array((int) $cat->id, $ic, true) ? ' checked' : '';
+            $on = in_array((int) $cat->id, $ooc, true) ? ' checked' : '';
             $checks .= '<label class="rp-chk"><input type="checkbox" value="'.$cat->id.'"'.$on.'> '.$e($cat->name).'</label>';
         }
-        $icNote = $ic === []
-            ? 'No boards selected — every board is treated as in-character.'
-            : 'Posting as a character only applies in the selected boards.';
+        $icNote = $ooc === []
+            ? 'Members can post as a character in every board. Tick a board to make it out-of-character (real account only).'
+            : 'Posting as a character is turned off in the ticked boards.';
 
         // Character-sheet field builder.
         $typeOpts = ['text' => 'Text', 'number' => 'Number', 'textarea' => 'Paragraph', 'select' => 'Choice'];
@@ -816,7 +821,7 @@ class Extension extends ServiceProvider
           </section>
 
           <section class="rp-sec">
-            <h2 class="rp-h2">In-character boards</h2>
+            <h2 class="rp-h2">Out-of-character boards</h2>
             <p class="rp-muted rp-ic-note">{$icNote}</p>
             <div class="rp-checks">{$checks}</div>
             <button id="rp-save-ic" class="rp-btn rp-ok">Save boards</button>
