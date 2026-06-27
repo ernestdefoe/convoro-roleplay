@@ -6,6 +6,7 @@ use App\Models\Post;
 use App\Support\ExtensionManager;
 use App\Support\ExtPage;
 use App\Support\PostIdentity;
+use Convoro\Ext\Roleplay\Http\GameController;
 use Convoro\Ext\Roleplay\Models\RpCharacter;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Auth;
@@ -327,7 +328,10 @@ class Extension extends ServiceProvider
                     ])->all();
             }
 
-            return response()->json(['rp' => $rp, 'canToggle' => $canToggle, 'topicId' => $topicId ?: null, 'characters' => $characters]);
+            return response()->json([
+                'rp' => $rp, 'canToggle' => $canToggle, 'topicId' => $topicId ?: null,
+                'characters' => $characters, 'userId' => Auth::id() ? (int) Auth::id() : null,
+            ]);
         });
 
         // Author or staff flip a topic between role-play and regular (explicit override).
@@ -497,6 +501,27 @@ class Extension extends ServiceProvider
 
                 return response()->json(['ok' => true, 'count' => count($fields)]);
             });
+        });
+
+        // Tactical card game — cards, combat sheets, and encounters run in a topic.
+        // Authenticated; GameController gates encounter actions (GM + active turn).
+        Route::middleware(['web', 'auth'])->group(function () {
+            Route::get('/api/ext/rp/cards', [GameController::class, 'listCards']);
+            Route::post('/api/ext/rp/cards', [GameController::class, 'saveCard']);
+            Route::post('/api/ext/rp/cards/{card}', [GameController::class, 'saveCard']);
+            Route::post('/api/ext/rp/cards/{card}/delete', [GameController::class, 'deleteCard']);
+            Route::get('/api/ext/rp/sheet/{character}', [GameController::class, 'getSheet']);
+            Route::post('/api/ext/rp/sheet/{character}', [GameController::class, 'saveSheet']);
+            Route::get('/api/ext/rp/encounter', [GameController::class, 'showEncounter']);
+            Route::post('/api/ext/rp/encounter', [GameController::class, 'createEncounter']);
+            Route::post('/api/ext/rp/encounter/{enc}/combatant', [GameController::class, 'addCombatant']);
+            Route::post('/api/ext/rp/combatant/{combatant}/remove', [GameController::class, 'removeCombatant']);
+            Route::post('/api/ext/rp/encounter/{enc}/join', [GameController::class, 'join']);
+            Route::post('/api/ext/rp/encounter/{enc}/play', [GameController::class, 'play']);
+            Route::post('/api/ext/rp/encounter/{enc}/start', [GameController::class, 'start']);
+            Route::post('/api/ext/rp/encounter/{enc}/next', [GameController::class, 'next']);
+            Route::post('/api/ext/rp/encounter/{enc}/end', [GameController::class, 'end']);
+            Route::get('/rp/deck', [GameController::class, 'deckPage']);
         });
 
         // Public character directory + claims (rendered in the real forum shell).

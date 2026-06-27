@@ -151,8 +151,162 @@
     });
   }
 
+  // ── Tactical combat tracker (injected into role-play topics) ────────────
+  if (!document.getElementById('rp-combat-style')) {
+    var cStyle = document.createElement('style');
+    cStyle.id = 'rp-combat-style';
+    cStyle.textContent =
+      '.rp-combat-host{margin:12px 0 16px}' +
+      '.rpc{border:1px solid rgb(var(--c-border));border-radius:14px;background:rgb(var(--c-surface));padding:14px 16px}' +
+      '.rpc-head{display:flex;align-items:center;justify-content:space-between;gap:8px;margin-bottom:10px}' +
+      '.rpc-title{font-weight:800;display:inline-flex;align-items:center;gap:6px}.rpc-title .fas{color:rgb(var(--c-primary))}' +
+      '.rpc-round{font-size:11px;font-weight:800;color:#16a34a;background:rgba(22,163,74,.12);padding:2px 9px;border-radius:999px}' +
+      '.rpc-badge{font-size:11px;font-weight:700;color:rgb(var(--c-muted));text-transform:uppercase;letter-spacing:.03em}' +
+      '.rpc-list{list-style:none;margin:0 0 10px;padding:0;display:flex;flex-direction:column;gap:6px}' +
+      '.rpc-cb{display:flex;align-items:center;gap:8px;padding:6px 8px;border-radius:9px;transition:background .12s}' +
+      '.rpc-cb.is-active{background:rgba(124,58,237,.1);box-shadow:inset 0 0 0 1px rgba(124,58,237,.4)}' +
+      '.rpc-cb.is-down{opacity:.5}.rpc-turn{width:12px;color:#7c3aed;text-align:center}' +
+      '.rpc-dot{flex:0 0 auto;width:10px;height:10px;border-radius:50%}.rpc-av{flex:0 0 auto;width:22px;height:22px;border-radius:50%;object-fit:cover}' +
+      '.rpc-main{flex:1;min-width:0}.rpc-top{display:flex;justify-content:space-between;gap:6px}' +
+      '.rpc-name{font-weight:700;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}' +
+      '.rpc-init{flex:0 0 auto;font-size:11px;font-weight:700;color:rgb(var(--c-muted))}' +
+      '.rpc-bar{height:6px;border-radius:3px;background:rgba(0,0,0,.12);overflow:hidden;margin:3px 0 1px}.rpc-fill{display:block;height:100%;transition:width .3s ease}' +
+      '.rpc-hp{font-size:11px;color:rgb(var(--c-muted))}' +
+      '.rpc-controls{display:flex;flex-direction:column;gap:6px;padding-top:8px;border-top:1px solid rgb(var(--c-border))}' +
+      '.rpc-row{display:flex;gap:6px;flex-wrap:wrap;align-items:center}.rpc-in{font:inherit;font-size:13px;padding:6px 8px;border-radius:8px;border:1px solid rgb(var(--c-border));background:rgb(var(--c-surface));color:rgb(var(--c-text));min-width:0}' +
+      '.rpc-in.grow{flex:1}.rpc-btn{font:inherit;font-size:13px;font-weight:600;padding:6px 12px;border-radius:8px;border:1px solid rgb(var(--c-border));background:transparent;color:inherit;cursor:pointer}' +
+      '.rpc-btn.primary{background:rgb(var(--c-primary));color:#fff;border-color:transparent}.rpc-btn.grow{flex:1}.rpc-btn.block{width:100%;justify-content:center}.rpc-end{color:#dc2626}' +
+      '.rpc-play{background:rgba(124,58,237,.06);margin:0 -16px;padding:10px 16px}' +
+      '.rpc-log{margin-top:10px;padding-top:8px;border-top:1px solid rgb(var(--c-border));display:flex;flex-direction:column;gap:4px;font-size:12px}' +
+      '.rpc-dmg{color:#dc2626;font-weight:800}.rpc-miss{color:rgb(var(--c-muted));font-style:italic}.rpc-critx{color:#f59e0b;font-weight:800}' +
+      '.rpc-outcome{display:flex;align-items:center;justify-content:center;gap:8px;margin:4px 0 10px;padding:9px;border-radius:10px;font-weight:800}' +
+      '.rpc-victory{background:rgba(22,163,74,.14);color:#16a34a}.rpc-defeat{background:rgba(220,38,38,.12);color:#dc2626}';
+    document.head.appendChild(cStyle);
+  }
+
+  function esc2(s) { var d = document.createElement('div'); d.textContent = s == null ? '' : s; return d.innerHTML; }
+  function rpApi(url, opts) {
+    return fetch(url, Object.assign({ credentials: 'same-origin', headers: { 'X-CSRF-TOKEN': csrf(), 'Content-Type': 'application/json', Accept: 'application/json' } }, opts || {}))
+      .then(function (r) { return r.json().then(function (j) { return { ok: r.ok, j: j }; }, function () { return { ok: r.ok, j: {} }; }); });
+  }
+
+  function setupCombat() {
+    if (!/^\/t\//.test(location.pathname)) return;
+    var h1 = document.querySelector('article.q-post h1');
+    if (!h1 || h1.getAttribute('data-rp-combat')) return;
+    var slug = decodeURIComponent(location.pathname.split('/')[2] || '');
+    if (!slug) return;
+    h1.setAttribute('data-rp-combat', '1');
+    getRpContext(null, null, slug).then(function (d) {
+      if (!d || !d.rp || !d.topicId) return;
+      var host = document.createElement('div');
+      host.className = 'rp-combat-host';
+      h1.parentNode.insertBefore(host, h1.nextSibling);
+      mountTracker(host, d);
+    });
+  }
+
+  function mountTracker(host, ctx) {
+    var topicId = ctx.topicId, userId = ctx.userId, myChars = ctx.characters || [];
+    var enc = null, cards = null, log = [], busy = false;
+    var add = { name: '', team: 'foe', hp: '10', defense: '' };
+
+    function activeCb() { if (!enc) return null; for (var i = 0; i < enc.combatants.length; i++) if (enc.combatants[i].id === enc.activeId) return enc.combatants[i]; return null; }
+    function myTurn() { var a = activeCb(); return a && a.character && a.character.userId === userId; }
+    function refetch() { rpApi('/api/ext/rp/encounter?topic=' + topicId, {}).then(function (res) { enc = res.j && res.j.data; render(); }); }
+    function act(promise) {
+      busy = true;
+      promise.then(function (res) {
+        busy = false;
+        if (!res.ok) { alert((res.j && res.j.error) || 'That action failed.'); render(); return; }
+        var data = res.j && res.j.data;
+        if (data && data.result) { log.unshift(data.result); log = log.slice(0, 6); enc = data.encounter; }
+        else { enc = data; }
+        render();
+      });
+    }
+    try { if (window.Echo) window.Echo.channel('rp.encounter.' + topicId).listen('.EncounterTouched', function (e) { if (e && e.encounter && !busy) { enc = e.encounter; render(); } }); } catch (x) {}
+    setInterval(function () { if (!document.hidden && !busy) refetch(); }, 15000);
+
+    function bar(cb) { var pct = cb.maxHp ? Math.max(0, Math.round((cb.hp / cb.maxHp) * 100)) : 0; return '<div class="rpc-bar"><span class="rpc-fill" style="width:' + pct + '%;background:' + (cb.team === 'party' ? '#16a34a' : '#dc2626') + '"></span></div>'; }
+    function cbRow(cb) {
+      var active = enc.activeId === cb.id;
+      var av = cb.character && cb.character.avatarUrl ? '<img class="rpc-av" src="' + esc2(cb.character.avatarUrl) + '" alt="">' : '<span class="rpc-dot" style="background:' + (cb.team === 'party' ? '#16a34a' : '#dc2626') + '"></span>';
+      var rm = (enc.isGm && enc.status === 'setup') ? '<button class="rpc-btn" data-rm="' + cb.id + '" title="Remove">&times;</button>' : '';
+      return '<li class="rpc-cb' + (active ? ' is-active' : '') + (cb.isDown ? ' is-down' : '') + '"><span class="rpc-turn">' + (active ? '▶' : '') + '</span>' + av +
+        '<span class="rpc-main"><span class="rpc-top"><span class="rpc-name">' + esc2(cb.name) + '</span>' + (enc.status !== 'setup' ? '<span class="rpc-init">⚡' + cb.initiative + '</span>' : '') + '</span>' +
+        bar(cb) + '<span class="rpc-hp">' + (cb.isDown ? 'Down' : (cb.hp + '/' + cb.maxHp + ' HP')) + '</span></span>' + rm + '</li>';
+    }
+    function outcome() {
+      if (!enc || enc.status !== 'active' || !enc.combatants.length) return '';
+      var party = enc.combatants.filter(function (c) { return c.team === 'party'; }), foes = enc.combatants.filter(function (c) { return c.team === 'foe'; });
+      if (party.length && party.every(function (c) { return c.isDown; })) return '<div class="rpc-outcome rpc-defeat">Defeat…</div>';
+      if (foes.length && foes.every(function (c) { return c.isDown; })) return '<div class="rpc-outcome rpc-victory">Victory!</div>';
+      return '';
+    }
+    function logRows() {
+      if (!log.length) return '';
+      return '<div class="rpc-log">' + log.map(function (r) {
+        var line = '<span><i class="' + (r.icon || 'fas fa-bolt') + '"></i> <b>' + esc2(r.actor) + '</b> ' + esc2(r.card) + (r.target ? ' → ' + esc2(r.target) : '');
+        if (r.crit) line += ' <span class="rpc-critx">CRIT!</span>';
+        if (r.hit && r.amount > 0) line += ' <span class="rpc-dmg">−' + r.amount + '</span>'; else if (!r.hit) line += ' <span class="rpc-miss">miss</span>';
+        return line + '</span>';
+      }).join('') + '</div>';
+    }
+
+    function render() {
+      if (!enc) {
+        host.innerHTML = userId ? '<div class="rpc"><div class="rpc-row"><input class="rpc-in grow" id="rpc-encname" placeholder="Encounter name (optional)"><button class="rpc-btn primary" id="rpc-create">⚔ Start an encounter</button></div></div>' : '';
+        var cc = host.querySelector('#rpc-create');
+        if (cc) cc.onclick = function () { var nm = (host.querySelector('#rpc-encname') || {}).value || ''; act(rpApi('/api/ext/rp/encounter', { method: 'POST', body: JSON.stringify({ topic: topicId, name: nm }) })); };
+        return;
+      }
+      var h = '<div class="rpc"><div class="rpc-head"><span class="rpc-title"><i class="fas fa-dragon"></i> ' + esc2(enc.name || 'Encounter') + '</span>' +
+        (enc.status === 'active' ? '<span class="rpc-round">Round ' + enc.round + '</span>' : '<span class="rpc-badge">' + esc2(enc.status) + '</span>') + '</div>' + outcome() +
+        '<ul class="rpc-list">' + enc.combatants.map(cbRow).join('') + '</ul>';
+
+      if (enc.status === 'setup' && userId) {
+        var joinable = myChars.filter(function (mc) { return !enc.combatants.some(function (cb) { return cb.characterId === mc.id; }); });
+        if (joinable.length) h += '<div class="rpc-controls"><div class="rpc-row"><select class="rpc-in grow" id="rpc-join">' + joinable.map(function (c) { return '<option value="' + c.id + '">' + esc2(c.name) + '</option>'; }).join('') + '</select><button class="rpc-btn" id="rpc-joinbtn">Join the fray</button></div></div>';
+      }
+      if (enc.isGm && enc.status === 'setup') {
+        h += '<div class="rpc-controls"><div class="rpc-row"><input class="rpc-in grow" id="rpc-aname" placeholder="Combatant name" value="' + esc2(add.name) + '"><select class="rpc-in" id="rpc-ateam"><option value="foe">Foe</option><option value="party">Party</option></select></div>' +
+          '<div class="rpc-row"><input class="rpc-in" id="rpc-ahp" type="number" min="1" placeholder="HP" value="' + esc2(add.hp) + '"><input class="rpc-in" id="rpc-adef" type="number" min="0" placeholder="Defense" value="' + esc2(add.defense) + '"><button class="rpc-btn" id="rpc-addbtn">Add</button></div>';
+        var foeCards = (cards || []).filter(function (c) { return c.type === 'enemy' || c.hp != null; });
+        if (foeCards.length) h += '<div class="rpc-row"><select class="rpc-in grow" id="rpc-spawn"><option value="">Spawn foe from card…</option>' + foeCards.map(function (c) { return '<option value="' + c.id + '">' + esc2(c.name) + '</option>'; }).join('') + '</select></div>';
+        h += '<button class="rpc-btn primary block" id="rpc-start"' + (enc.combatants.length < 1 ? ' disabled' : '') + '>Roll initiative &amp; start</button></div>';
+      }
+      if (enc.status === 'active' && (myTurn() || enc.isGm)) {
+        var a = activeCb(), targets = enc.combatants.filter(function (c) { return !c.isDown; });
+        h += '<div class="rpc-play"><div style="font-weight:700;color:#7c3aed;margin-bottom:6px">Your move' + (a ? ' — ' + esc2(a.name) : '') + '</div><div class="rpc-row">' +
+          '<select class="rpc-in grow" id="rpc-card"><option value="">Choose a card…</option>' + (cards || []).map(function (c) { return '<option value="' + c.id + '">' + esc2(c.name) + '</option>'; }).join('') + '</select>' +
+          '<select class="rpc-in" id="rpc-target"><option value="">No target</option>' + targets.map(function (c) { return '<option value="' + c.id + '">' + esc2(c.name) + '</option>'; }).join('') + '</select><button class="rpc-btn primary" id="rpc-playbtn">Play</button></div></div>';
+      }
+      if (enc.isGm && enc.status === 'active') h += '<div class="rpc-controls"><div class="rpc-row"><button class="rpc-btn primary grow" id="rpc-next">Next turn</button><button class="rpc-btn rpc-end" id="rpc-end">End</button></div></div>';
+      h += logRows() + '</div>';
+      host.innerHTML = h;
+
+      function on(id, fn) { var x = host.querySelector('#' + id); if (x) x.onclick = fn; }
+      host.querySelectorAll('[data-rm]').forEach(function (b) { b.onclick = function () { act(rpApi('/api/ext/rp/combatant/' + b.getAttribute('data-rm') + '/remove', { method: 'POST', body: '{}' })); }; });
+      on('rpc-joinbtn', function () { act(rpApi('/api/ext/rp/encounter/' + enc.id + '/join', { method: 'POST', body: JSON.stringify({ characterId: host.querySelector('#rpc-join').value }) })); });
+      on('rpc-addbtn', function () {
+        add.name = host.querySelector('#rpc-aname').value; add.team = host.querySelector('#rpc-ateam').value; add.hp = host.querySelector('#rpc-ahp').value; add.defense = host.querySelector('#rpc-adef').value;
+        if (!add.name.trim()) { alert('Name the combatant.'); return; }
+        act(rpApi('/api/ext/rp/encounter/' + enc.id + '/combatant', { method: 'POST', body: JSON.stringify({ name: add.name, team: add.team, maxHp: add.hp, defense: add.defense }) })); add.name = '';
+      });
+      var sp = host.querySelector('#rpc-spawn'); if (sp) sp.onchange = function () { if (this.value) act(rpApi('/api/ext/rp/encounter/' + enc.id + '/combatant', { method: 'POST', body: JSON.stringify({ cardId: this.value, team: 'foe' }) })); };
+      on('rpc-start', function () { act(rpApi('/api/ext/rp/encounter/' + enc.id + '/start', { method: 'POST', body: '{}' })); });
+      on('rpc-next', function () { act(rpApi('/api/ext/rp/encounter/' + enc.id + '/next', { method: 'POST', body: '{}' })); });
+      on('rpc-end', function () { if (confirm('End this encounter for everyone?')) act(rpApi('/api/ext/rp/encounter/' + enc.id + '/end', { method: 'POST', body: '{}' })); });
+      on('rpc-playbtn', function () { var card = host.querySelector('#rpc-card').value; if (!card) { alert('Pick a card.'); return; } var a = activeCb(); act(rpApi('/api/ext/rp/encounter/' + enc.id + '/play', { method: 'POST', body: JSON.stringify({ cardId: card, actorCombatantId: a ? a.id : 0, targetCombatantId: host.querySelector('#rpc-target').value }) })); });
+    }
+
+    rpApi('/api/ext/rp/cards', {}).then(function (res) { cards = (res.j && res.j.data) || []; render(); });
+    refetch();
+  }
+
   var rpScan;
-  function scheduleScan() { cancelAnimationFrame(rpScan); rpScan = requestAnimationFrame(function () { markRpPosts(); setupTopicRp(); }); }
+  function scheduleScan() { cancelAnimationFrame(rpScan); rpScan = requestAnimationFrame(function () { markRpPosts(); setupTopicRp(); setupCombat(); }); }
   scheduleScan();
   // Re-scan on SPA navigation + when live replies are appended.
   new MutationObserver(scheduleScan).observe(document.body, { childList: true, subtree: true });

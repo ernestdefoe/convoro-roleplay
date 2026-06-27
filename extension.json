@@ -1,8 +1,8 @@
 {
   "id": "convoro-roleplay",
   "name": "Role-Play",
-  "version": "1.0.0",
-  "description": "Turn Convoro into a role-play forum: members create characters and post as them. Multi-character accounts, role-play topics, character sheets & dice, a character directory with claims, thread trackers, avatars & hero images — a polished, free first-party extension.",
+  "version": "1.1.0",
+  "description": "Turn Convoro into a role-play forum: members create characters and post as them. Multi-character accounts, role-play topics, character sheets & dice, a character directory with claims, thread trackers, avatars & hero images, plus a tactical card game — build cards (abilities, items, spells, enemies) and run live turn-based combat encounters right inside a topic. A polished, free first-party extension.",
   "author": "Convoro",
   "convoro": ">=1.39.2",
   "type": "extension",
